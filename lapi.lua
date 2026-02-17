@@ -227,7 +227,7 @@ end
 
 function wrapper.export(prefix)
     local config = wrapper.save()
-    if type(prefix) ~= "string" then prefix = "eapi" end
+    if type(prefix) ~= "string" then prefix = "lapi" end
     clipboard.set(prefix .. ":gamesense:" ..base64.encode(json.stringify(config)))
 end
 
