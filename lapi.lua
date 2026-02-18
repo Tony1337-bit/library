@@ -19,20 +19,22 @@ local function new_object()
 
     function self:get(option)
         local element_type = self:type()
-        local value = _ui.get(self.reference)
-        
-        if element_type == "multiselect" and option then
-            if type(value) == "table" then
-                for _, selected in ipairs(value) do
-                    if selected == option then
-                        return true
+
+        if element_type == "multiselect" then
+            local value = _ui.get(self.reference)
+            if option then
+                if type(value) == "table" then
+                    for _, selected in ipairs(value) do
+                        if selected == option then
+                            return true
+                        end
                     end
                 end
+                return false
             end
-            return false
         end
-        
-        return value
+
+        return _ui.get(self.reference)
     end
 
     function self:set(value) _ui.set(self.reference, value) end
@@ -69,9 +71,7 @@ local function new_object()
             local element_type = self:type()
 
             if element_type == "checkbox" then
-                if self:get() then
-                    callback_fn(self, ...)
-                end
+                if self:get() then callback_fn(self, ...) end
             else
                 callback_fn(self, ...)
             end
@@ -84,9 +84,7 @@ local function new_object()
     end
 
     function self:callback(callback_fn)
-        local wrapper = function()
-            callback_fn(self)
-        end
+        local wrapper = function() callback_fn(self) end
         _ui.set_callback(self.reference, wrapper)
         return self
     end
@@ -120,9 +118,12 @@ function wrapper.group(tab, container)
         return register_element(obj, self.tab, self.container, name)
     end
 
-    function g:slider(name, min, max, default, show_tooltip, unit, scale, tooltips)
+    function g:slider(name, min, max, default, show_tooltip, unit, scale,
+                      tooltips)
         local obj = new_object()
-        obj.reference = _ui.new_slider(self.tab, self.container, name, min, max, default or min, show_tooltip or true, unit or "", scale or 1.0, tooltips or {})
+        obj.reference = _ui.new_slider(self.tab, self.container, name, min, max,
+                                       default or min, show_tooltip or true,
+                                       unit or "", scale or 1.0, tooltips or {})
         return register_element(obj, self.tab, self.container, name)
     end
 
@@ -157,7 +158,8 @@ function wrapper.group(tab, container)
     function g:color_picker(name, default_color)
         local obj = new_object()
         if default_color == nil then default_color = {255, 255, 255, 255} end
-        obj.reference = _ui.new_color_picker(self.tab, self.container, name,unpack(default_color))
+        obj.reference = _ui.new_color_picker(self.tab, self.container, name,
+                                             default_color)
         return register_element(obj, self.tab, self.container, name)
     end
 
@@ -175,7 +177,8 @@ function wrapper.group(tab, container)
 
     function g:hotkey(name, ecx, edx)
         local obj = new_object()
-        obj.reference = _ui.new_hotkey(self.tab, self.container, name, ecx,edx or 0)
+        obj.reference = _ui.new_hotkey(self.tab, self.container, name, ecx,
+                                       edx or 0)
         return register_element(obj, self.tab, self.container, name)
     end
 
@@ -191,9 +194,14 @@ function wrapper.group(tab, container)
 end
 
 function wrapper.find(tab, container, name)
-    local obj = new_object()
-    obj.reference = _ui.reference(tab, container, name)
-    return obj
+    local refs = {_ui.reference(tab, container, name)}
+    local objects = {}
+    for _, ref in ipairs(refs) do
+        local obj = new_object()
+        obj.reference = ref
+        table.insert(objects, obj)
+    end
+    return table.unpack(objects)
 end
 
 function wrapper.save()
@@ -227,8 +235,8 @@ end
 
 function wrapper.export(prefix)
     local config = wrapper.save()
-    if type(prefix) ~= "string" then prefix = "lapi" end
-    clipboard.set(prefix .. ":gamesense:" ..base64.encode(json.stringify(config)))
+    if type(prefix) ~= "string" then prefix = "eapi" end
+    clipboard.set(prefix .. ":gamesense:" .. base64.encode(json.stringify(config)))
 end
 
 function wrapper.import(config_string)
@@ -311,29 +319,6 @@ utils.print = function(name, ...)
     client.color_log(255, 255, 255, " » \0")
     client.color_log(217, 217, 217, messages)
 end
-
--- utils.print = function(name, ...)
---     local message = {...}
---     local messages
---     if #message > 0 and type(message[1]) == "string" and message[1]:find("%%") then
---         local success, formatted = pcall(string.format, message[1], unpack(message, 2))
---         if success then
---             messages = formatted
---         else
---             for k, v in ipairs(message) do message[k] = tostring(v) end
---             messages = table.concat(message, " ")
---         end
---     else
---         for k, v in ipairs(message) do message[k] = tostring(v) end
---         messages = table.concat(message, " ")
---     end
-    
---     local r, g, b, a = ui.get(ui.reference("misc", "settings", "menu color"))
---     client.color_log(r, g, b, name .. " •\0")
---     client.color_log(255, 255, 255, " » \0")
---     client.color_log(217, 217, 217, messages)
--- end
-
 
 utils.name = function(name)
     if name ~= nil then

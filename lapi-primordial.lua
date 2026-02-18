@@ -247,7 +247,8 @@ function wrapper.group(container, columm)
         if not name then error("slider: name required") end
 
         local obj = new_object()
-        obj.reference =_menu.add_slider(container, name, min, max, step, precision or 0, suffix or "")
+        obj.reference = _menu.add_slider(container, name, min, max, step,
+                                         precision or 0, suffix or "")
 
         obj:_initialize()
         return register_element(obj, container, name)
