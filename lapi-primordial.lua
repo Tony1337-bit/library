@@ -490,6 +490,7 @@ local mt = {
     end
 }
 
+events = {}
 callbacks.add(e_callbacks.PAINT, function() end)
 
 lui = setmetatable({}, mt)
