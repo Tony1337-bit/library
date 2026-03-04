@@ -1,9 +1,11 @@
---[[ lapi - Libre Application Programming Interface ]] 
-local vector = require "vector"
+--[[ lapi - Libre Application Programming Interface ]] local vector =
+require "vector"
+local ffi = require "ffi"
 local clipboard = require "gamesense/clipboard"
 local base64 = require "gamesense/base64"
 local _ui = ui
 local wrapper = {}
+
 
 local config_registry = {}
 
@@ -155,11 +157,11 @@ function wrapper.group(tab, container)
         return register_element(obj, self.tab, self.container, name)
     end
 
-    function g:color_picker(name, default_color)
+    function g:color_picker(name, r, g, b, a)
         local obj = new_object()
-        if default_color == nil then default_color = {255, 255, 255, 255} end
         obj.reference = _ui.new_color_picker(self.tab, self.container, name,
-                                             default_color)
+                                             r or 255, g or 255, b or 255,
+                                             a or 255)
         return register_element(obj, self.tab, self.container, name)
     end
 
@@ -236,7 +238,8 @@ end
 function wrapper.export(prefix)
     local config = wrapper.save()
     if type(prefix) ~= "string" then prefix = "eapi" end
-    clipboard.set(prefix .. ":gamesense:" .. base64.encode(json.stringify(config)))
+    clipboard.set(prefix .. ":gamesense:" ..
+                      base64.encode(json.stringify(config)))
 end
 
 function wrapper.import(config_string)
@@ -295,6 +298,19 @@ lui = setmetatable({}, mt)
 entity_c = {}
 
 utils = {}
+
+utils.get_vfunc = function(module_name, interface_name, index, typestring)
+    local addr = client.create_interface(module_name, interface_name);
+    assert(addr, string.format("%s::%s is invalid interface", module_name,
+                               interface_name));
+
+    local ctype = ffi.typeof(typestring);
+
+    local vtable = ffi.cast("void***", addr);
+    local vfunc = ffi.cast(ctype, vtable[0][index]);
+
+    return function(...) return vfunc(vtable, ...); end
+end
 
 utils.get_velocity = function(ent)
     if not ent then return end
@@ -363,3 +379,162 @@ events = setmetatable({}, {
         return self[key]
     end
 })
+
+
+
+filesystem = {}
+do
+    local native = {
+        ReadFile = utils.get_vfunc('filesystem_stdio.dll', 'VBaseFileSystem011',
+                                   0,
+                                   'int (__thiscall*)(void*, void*, int, void*)'),
+        WriteFile = utils.get_vfunc('filesystem_stdio.dll',
+                                    'VBaseFileSystem011', 1,
+                                    'int (__thiscall*)(void*, void const*, int, void*)'),
+
+        OpenFile = utils.get_vfunc('filesystem_stdio.dll', 'VBaseFileSystem011',
+                                   2,
+                                   'void* (__thiscall*)(void*, const char*, const char*, const char*)'),
+        CloseFile = utils.get_vfunc('filesystem_stdio.dll',
+                                    'VBaseFileSystem011', 3,
+                                    'void (__thiscall*)(void*, void*)'),
+
+        GetFileSize = utils.get_vfunc('filesystem_stdio.dll',
+                                      'VBaseFileSystem011', 7,
+                                      'unsigned int (__thiscall*)(void*, void*)'),
+        FileExists = utils.get_vfunc('filesystem_stdio.dll',
+                                     'VBaseFileSystem011', 10,
+                                     'bool (__thiscall*)(void*, const char*, const char*)'),
+        GetFileTime = utils.get_vfunc('filesystem_stdio.dll',
+                                      'VBaseFileSystem011', 13,
+                                      'int (__thiscall*)(void*, const char*, const char*)'),
+
+        AddSearchPath = utils.get_vfunc('filesystem_stdio.dll',
+                                        'VFileSystem017', 11,
+                                        'void (__thiscall*)(void*, const char*, const char*, int)'),
+        RemoveSearchPath = utils.get_vfunc('filesystem_stdio.dll',
+                                           'VFileSystem017', 12,
+                                           'bool (__thiscall*)(void*, const char*, const char*)'),
+
+        RemoveFile = utils.get_vfunc('filesystem_stdio.dll', 'VFileSystem017',
+                                     20,
+                                     'void (__thiscall*)(void*, const char*, const char*)'),
+        RenameFile = utils.get_vfunc('filesystem_stdio.dll', 'VFileSystem017',
+                                     21,
+                                     'bool (__thiscall*)(void*, const char*, const char*, const char*)'),
+        CreateDirHierarchy = utils.get_vfunc('filesystem_stdio.dll',
+                                             'VFileSystem017', 22,
+                                             'void (__thiscall*)(void*, const char*, const char*)'),
+        IsDirectory = utils.get_vfunc('filesystem_stdio.dll', 'VFileSystem017', 23,'bool (__thiscall*)(void*, const char*, const char*)'),
+        FindFirst = utils.get_vfunc('filesystem_stdio.dll', 'VFileSystem017', 32, 'const char* (__thiscall*)(void*, const char*, int*)'),
+        FindNext = utils.get_vfunc('filesystem_stdio.dll', 'VFileSystem017', 33, 'const char* (__thiscall*)(void*, int)'),
+        FindIsDirectory = utils.get_vfunc('filesystem_stdio.dll','VFileSystem017', 34, 'bool (__thiscall*)(void*, int)'),
+        FindClose = utils.get_vfunc('filesystem_stdio.dll', 'VFileSystem017', 35, 'void (__thiscall*)(void*, int)'),
+        GetGameDirectory = utils.get_vfunc('engine.dll', 'VEngineClient014', 36, 'const char*(__thiscall*)(void*)')
+    }
+
+    local modes = {
+        ['r'] = 'r', -- Open for reading 
+        ['w'] = 'w', -- Create for writing (will overwrite existing) 
+        ['a'] = 'a', -- Append to 
+        ['r+'] = 'r+', -- Open for read/write 
+        ['w+'] = 'w+', -- Create for read/write 
+        ['a+'] = 'a+', -- Append to or create for read/write 
+        ['rb'] = 'rb', -- b is for binary
+        ['wb'] = 'wb',
+        ['ab'] = 'ab',
+        ['rb+'] = 'rb+',
+        ['wb+'] = 'wb+',
+        ['ab+'] = 'ab+'
+    }
+
+    filesystem.read = function(self)
+        local size = self:get_size()
+        local array = ffi.new('char[?]', size + 1)
+        native.ReadFile(array, size, self.handle)
+        return ffi.string(array, size)
+    end
+    filesystem.write = function(self, ...)
+        local string = tostring(table.concat({...}))
+        native.WriteFile(string, string:len(), self.handle)
+    end
+
+    filesystem.open = function(path, mode, path_id)
+        if not modes[mode] then return nil end
+
+        return setmetatable({
+            path = path,
+            mode = mode,
+            path_id = path_id,
+            handle = native.OpenFile(path, mode, path_id)
+        }, {__index = file})
+    end
+    filesystem.close = function(self) native.CloseFile(self.handle) end
+
+    filesystem.get_size = function(self)
+        return native.GetFileSize(self.handle)
+    end
+    filesystem.exists = function(path, path_id)
+        return native.FileExists(path, path_id)
+    end
+    filesystem.get_time = function(path, path_id)
+        return native.GetFileTime(path, path_id)
+    end
+
+    filesystem.add_search_path = function(path, path_id, type)
+        native.AddSearchPath(path, path_id, type)
+    end
+    filesystem.remove_search_path = function(path, path_id)
+        native.RemoveSearchPath(path, path_id)
+    end
+
+    filesystem.remove = function(path, path_id)
+        native.RemoveFile(path, path_id)
+    end
+    filesystem.rename = function(old_path, new_path, path_id)
+        native.RenameFile(old_path, new_path, path_id)
+    end
+    filesystem.create_directory = function(path, path_id)
+        native.CreateDirHierarchy(path, path_id)
+    end
+    filesystem.is_directory = function(path, path_id)
+        return native.IsDirectory(path, path_id)
+    end
+
+    filesystem.find_first = function(path)
+        local handle = ffi.new('int[1]')
+        local found_file = native.FindFirst(path, handle)
+        if found_file == ffi.NULL then return nil end
+        return handle, ffi.string(found_file)
+    end
+    filesystem.find_next = function(handle)
+        local found_file = native.FindNext(handle)
+        if found_file == ffi.NULL then return nil end
+        return ffi.string(found_file)
+    end
+    filesystem.find_is_directory = function(handle)
+        return native.FindIsDirectory(handle)
+    end
+    find_close = function(handle) native.FindClose(handle) end
+
+    filesystem.get_game_directory = function()
+        return ffi.string(native.GetGameDirectory()):sub(1, -5)
+    end
+    filesystem.list_files = function(self, path)
+        local names = {}
+        local handle, name = self.find_first(
+                                 ('%s\\%s\\*'):format(self.get_game_directory(),
+                                                      path))
+        if not handle then return names end
+        repeat
+            if not file.find_is_directory(handle[0]) then
+                table.insert(names, name)
+            end
+            name = file.find_next(handle[0])
+        until not name
+
+        self.find_close(handle[0])
+        return names
+    end
+
+end
