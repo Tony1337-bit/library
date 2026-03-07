@@ -1,13 +1,30 @@
---[[ lapi - Libre Application Programming Interface ]] local vector =
-require "vector"
+--[[ lapi - Libre Application Programming Interface ]] 
+local vector =require "vector"
 local ffi = require "ffi"
 local clipboard = require "gamesense/clipboard"
 local base64 = require "gamesense/base64"
+
 local _ui = ui
 local wrapper = {}
-
-
+drag = {}
 local config_registry = {}
+
+local is_menu_visible = false
+
+client.set_event_callback("paint_ui",function() 
+    is_menu_visible = ui.is_menu_open() 
+end)
+
+local sw, sh = client.screen_size()
+
+local screen_cx = math.floor(sw / 2)
+local screen_cy = math.floor(sh / 2)
+
+local snap_threshold = 8
+
+local line_alpha_base = 40
+local line_alpha_hit = 200
+local drag_bg_alpha = 100
 
 local function register_element(obj, tab, container, name)
     local key = tab .. ":" .. container .. ":" .. name
@@ -73,7 +90,9 @@ local function new_object()
             local element_type = self:type()
 
             if element_type == "checkbox" then
-                if self:get() then callback_fn(self, ...) end
+                if self:get() then 
+                    callback_fn(self, ...) 
+                end
             else
                 callback_fn(self, ...)
             end
@@ -242,6 +261,8 @@ function wrapper.export(prefix)
                       base64.encode(json.stringify(config)))
 end
 
+
+
 function wrapper.import(config_string)
     if config_string == nil then
         config_string = clipboard.get()
@@ -380,8 +401,6 @@ events = setmetatable({}, {
     end
 })
 
-
-
 filesystem = {}
 do
     local native = {
@@ -425,22 +444,33 @@ do
         CreateDirHierarchy = utils.get_vfunc('filesystem_stdio.dll',
                                              'VFileSystem017', 22,
                                              'void (__thiscall*)(void*, const char*, const char*)'),
-        IsDirectory = utils.get_vfunc('filesystem_stdio.dll', 'VFileSystem017', 23,'bool (__thiscall*)(void*, const char*, const char*)'),
-        FindFirst = utils.get_vfunc('filesystem_stdio.dll', 'VFileSystem017', 32, 'const char* (__thiscall*)(void*, const char*, int*)'),
-        FindNext = utils.get_vfunc('filesystem_stdio.dll', 'VFileSystem017', 33, 'const char* (__thiscall*)(void*, int)'),
-        FindIsDirectory = utils.get_vfunc('filesystem_stdio.dll','VFileSystem017', 34, 'bool (__thiscall*)(void*, int)'),
-        FindClose = utils.get_vfunc('filesystem_stdio.dll', 'VFileSystem017', 35, 'void (__thiscall*)(void*, int)'),
-        GetGameDirectory = utils.get_vfunc('engine.dll', 'VEngineClient014', 36, 'const char*(__thiscall*)(void*)')
+        IsDirectory = utils.get_vfunc('filesystem_stdio.dll', 'VFileSystem017',
+                                      23,
+                                      'bool (__thiscall*)(void*, const char*, const char*)'),
+
+        FindFirst = utils.get_vfunc('filesystem_stdio.dll', 'VFileSystem017',
+                                    32,
+                                    'const char* (__thiscall*)(void*, const char*, int*)'),
+        FindNext = utils.get_vfunc('filesystem_stdio.dll', 'VFileSystem017', 33,
+                                   'const char* (__thiscall*)(void*, int)'),
+        FindIsDirectory = utils.get_vfunc('filesystem_stdio.dll',
+                                          'VFileSystem017', 34,
+                                          'bool (__thiscall*)(void*, int)'),
+        FindClose = utils.get_vfunc('filesystem_stdio.dll', 'VFileSystem017',
+                                    35, 'void (__thiscall*)(void*, int)'),
+
+        GetGameDirectory = utils.get_vfunc('engine.dll', 'VEngineClient014', 36,
+                                           'const char*(__thiscall*)(void*)')
     }
 
     local modes = {
-        ['r'] = 'r', -- Open for reading 
-        ['w'] = 'w', -- Create for writing (will overwrite existing) 
-        ['a'] = 'a', -- Append to 
-        ['r+'] = 'r+', -- Open for read/write 
-        ['w+'] = 'w+', -- Create for read/write 
-        ['a+'] = 'a+', -- Append to or create for read/write 
-        ['rb'] = 'rb', -- b is for binary
+        ['r'] = 'r',
+        ['w'] = 'w',
+        ['a'] = 'a',
+        ['r+'] = 'r+',
+        ['w+'] = 'w+',
+        ['a+'] = 'a+',
+        ['rb'] = 'rb',
         ['wb'] = 'wb',
         ['ab'] = 'ab',
         ['rb+'] = 'rb+',
@@ -515,22 +545,23 @@ do
     filesystem.find_is_directory = function(handle)
         return native.FindIsDirectory(handle)
     end
-    find_close = function(handle) native.FindClose(handle) end
+    filesystem.find_close = function(handle) native.FindClose(handle) end
 
     filesystem.get_game_directory = function()
         return ffi.string(native.GetGameDirectory()):sub(1, -5)
     end
-    filesystem.list_files = function(self, path)
+    function filesystem:list_files(path)
         local names = {}
         local handle, name = self.find_first(
                                  ('%s\\%s\\*'):format(self.get_game_directory(),
                                                       path))
         if not handle then return names end
+
         repeat
-            if not file.find_is_directory(handle[0]) then
+            if not self.find_is_directory(handle[0]) then
                 table.insert(names, name)
             end
-            name = file.find_next(handle[0])
+            name = self.find_next(handle[0])
         until not name
 
         self.find_close(handle[0])
@@ -538,3 +569,147 @@ do
     end
 
 end
+
+
+drag.list = {}
+drag.windows = {}
+
+drag.__index = drag
+
+drag.register = function(position, size, global_name, ins_function,show_symmetry)
+    local data = {
+        size = size,
+        position = {x = ui.get(position[1]), y = ui.get(position[2])},
+
+        is_dragging = false,
+        drag_position = {x = 0, y = 0},
+
+        global_name = global_name,
+        ins_function = ins_function,
+        show_symmetry = show_symmetry or false,
+
+        ui_callbacks = {x = position[1], y = position[2]}
+    }
+
+    table.insert(drag.windows, data)
+    return setmetatable(data, drag)
+end
+
+function drag:limit_positions()
+    if self.position.x < 0 then self.position.x = 0 end
+    if self.position.x + self.size.x >= sw - 1 then
+        self.position.x = sw - self.size.x - 1
+    end
+    if self.position.y < 0 then self.position.y = 0 end
+    if self.position.y + self.size.y >= sh - 1 then
+        self.position.y = sh - self.size.y - 1
+    end
+end
+
+function drag:is_in_area(mx, my)
+    return
+        mx >= self.position.x and mx <= self.position.x + self.size.x and my >=
+            self.position.y and my <= self.position.y + self.size.y
+end
+
+function drag:check_symmetry_hits()
+    local cx = self.position.x + self.size.x / 2
+    local cy = self.position.y + self.size.y / 2
+
+    local hit_v = math.abs(cx - screen_cx) <= snap_threshold
+    local hit_h = math.abs(cy - screen_cy) <= snap_threshold
+
+    return hit_v, hit_h
+end
+
+-- draws full-screen symmetry lines, highlights if any dragging window collides
+function drag.draw_symmetry_lines()
+    local hit_v, hit_h = false, false
+    -- check all currently-dragging windows
+    if not is_menu_visible then
+        return
+    end
+    for _, win in pairs(drag.windows) do
+        if win.show_symmetry and win.is_dragging then
+            local v, h = drag.check_symmetry_hits(win)
+            if v then hit_v = true end
+            if h then hit_h = true end
+        end
+    end
+
+    local alpha_v = hit_v and line_alpha_hit or line_alpha_base
+    local alpha_h = hit_h and line_alpha_hit or line_alpha_base
+
+    renderer.line(screen_cx, 0, screen_cx, sh, 255, 255, 255, alpha_v)
+    renderer.line(0, screen_cy, sw, screen_cy, 255, 255, 255, alpha_h)
+end
+
+function drag:update(...)
+    if is_menu_visible == true then
+        local mx, my = ui.mouse_position()
+        local in_area = self:is_in_area(mx, my)
+
+        local list = drag.list
+        local lmb_down = client.key_state(0x1)
+        local target_free = (list.target == nil or list.target == "" or
+                                list.target == self.global_name)
+
+        if (in_area or self.is_dragging) and lmb_down and target_free then
+            list.target = self.global_name
+
+            if not self.is_dragging then
+                self.is_dragging = true
+                self.drag_position = {
+                    x = mx - self.position.x,
+                    y = my - self.position.y
+                }
+            else
+                self.position.x = mx - self.drag_position.x
+                self.position.y = my - self.drag_position.y
+                self:limit_positions()
+
+                ui.set(self.ui_callbacks.x, math.floor(self.position.x))
+                ui.set(self.ui_callbacks.y, math.floor(self.position.y))
+            end
+        elseif not lmb_down then
+            list.target = ""
+            self.is_dragging = false
+            self.drag_position = {x = 0, y = 0}
+        end
+
+        -- dark overlay while this window is being dragged
+        if self.is_dragging then
+            renderer.rectangle(0, 0, sw, sh, 0, 0, 0, drag_bg_alpha)
+        end
+        drag.draw_symmetry_lines()
+    end
+
+    self.ins_function(self, ...)
+end
+
+drag.on_config_load = function()
+    for _, point in pairs(drag.windows) do
+        point.position = {
+            x = ui.get(point.ui_callbacks.x),
+            y = ui.get(point.ui_callbacks.y)
+        }
+    end
+end
+
+client.set_event_callback("setup_command", function(cmd)
+    local org = {
+        in_attack = cmd.in_attack,
+        in_attack2 = cmd.in_attack2,
+        in_use = cmd.in_use
+    }
+
+    if is_menu_visible == true then
+        cmd.in_attack = 0
+        cmd.in_attack2 = 0
+        cmd.in_use = 0
+    else
+        cmd.in_attack = org.in_attack
+        cmd.in_attack2 = org.in_attack2
+        cmd.in_use = org.in_use
+    end
+end)
