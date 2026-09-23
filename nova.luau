@@ -561,6 +561,12 @@ end
 local Widgets = {}
 
 function Widgets.createHudRow(name, height, order)
+    -- Rows may be created before createWindow() populated the layout (e.g. the
+    -- demo builds HUD first), so lazily seed a default entry instead of crashing.
+    if not HudLayout[name] then
+        HudLayout[name] = {X = 16, Y = 48, Enabled = true}
+    end
+
     local row = Instance.new("Frame")
     row.Name = name
     row.Size = UDim2.new(0, 0, 0, height)
@@ -1808,6 +1814,9 @@ if RUN_EXAMPLE and getgenv then
     local Demo = {}
     local NovaUI = Nova
 
+    -- 0. WINDOW CHROME — must exist before any HUD row (rows parent to it)
+    NovaUI.createWindow()
+
     ---------------------------------------------------------------
     -- 1. HUD WATERMARK (top-left, persistent under the UI toggle)
     ---------------------------------------------------------------
@@ -1946,9 +1955,8 @@ if RUN_EXAMPLE and getgenv then
     end))
 
     ---------------------------------------------------------------
-    -- 2. MAIN WINDOW
+    -- 2. MAIN WINDOW (chrome already created in step 0)
     ---------------------------------------------------------------
-    NovaUI.createWindow()
 
     -- Top-right info stack: game name / username / version
     local topInfo = NovaUI:info()
